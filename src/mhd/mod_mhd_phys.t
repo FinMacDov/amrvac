@@ -327,17 +327,6 @@ contains
       call mpistop('Unknown divB fix')
     end select
 
-    select case (mhd_boris_method)
-    case ("none")
-      mhd_boris_type = boris_none
-    case ("reduced_force")
-      mhd_boris_type = boris_reduced_force
-    case ("simplification")
-      mhd_boris_type = boris_simplification
-    case default
-      call mpistop("Unknown mhd_boris_method (none, reduced_force, simplification)")
-    end select
-
     ! Determine flux variables
     rho_ = var_set_rho()
 
@@ -387,6 +376,20 @@ contains
       if(ndim>1) flux_type(idir,mag(idir))=flux_tvdlf
     end do
     if(mhd_glm .and. ndim>1) flux_type(:,psi_)=flux_tvdlf
+
+    select case (mhd_boris_method)
+    case ("none")
+      mhd_boris_type = boris_none
+    case ("reduced_force")
+      mhd_boris_type = boris_reduced_force
+    case ("simplification")
+      mhd_boris_type = boris_simplification
+      do idir = 1, ndir
+        phys_iw_methods(mom(idir))%inv_capacity => mhd_gamma2_alfven
+      end do
+    case default
+      call mpistop("Unknown mhd_boris_method (none, reduced_force, simplification)")
+    end select
 
     phys_get_dt              => mhd_get_dt
     phys_get_cmax            => mhd_get_cmax
@@ -831,6 +834,9 @@ contains
 
     if (.not. MHD_Hall) then
        csound(ixO^S) = sqrt(half*(cfast2(ixO^S)+AvMinCs2(ixO^S)))
+       if (mhd_boris_type == boris_simplification) then
+          csound(ixO^S) = mhd_gamma_alfven(w, ixI^L,ixO^L) * csound(ixO^S)
+       end if
     else
        ! take the Hall velocity into account:
        ! most simple estimate, high k limit:
@@ -880,6 +886,9 @@ contains
 
     if (.not. MHD_Hall) then
        csound(ixO^S) = sqrt(half*(cfast2(ixO^S)+AvMinCs2(ixO^S)))
+       if (mhd_boris_type == boris_simplification) then
+          csound(ixO^S) = mhd_gamma_alfven(w, ixI^L,ixO^L) * csound(ixO^S)
+       end if
     else
        ! take the Hall velocity into account:
        ! most simple estimate, high k limit:
@@ -1317,6 +1326,18 @@ contains
            (w(ixO^S, rho_) * mhd_boris_c**2))
     end if
   end subroutine mhd_gamma2_alfven
+
+  !> Compute 1/sqrt(1+v_A^2/c^2) for Boris' approximation, where v_A is the
+  !> Alfven velocity
+  function mhd_gamma_alfven(w, ixI^L, ixO^L) result(gamma_A)
+    use mod_global_parameters
+    integer, intent(in)           :: ixI^L, ixO^L
+    double precision, intent(in)  :: w(ixI^S, nw)
+    double precision              :: gamma_A(ixO^S)
+
+    call mhd_gamma2_alfven(ixI^L, ixO^L, w, gamma_A)
+    gamma_A = sqrt(gamma_A)
+  end function mhd_gamma_alfven
 
   subroutine internal_energy_add_source(qdt,ixI^L,ixO^L,wCT,w,x)
     use mod_global_parameters

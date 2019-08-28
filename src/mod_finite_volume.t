@@ -27,6 +27,7 @@ contains
     double precision, dimension(ixI^S,1:nw) :: wprim, wLC, wRC
     ! left and right constructed status in primitive form, needed for better performance
     double precision, dimension(ixI^S,1:nw) :: wLp, wRp
+    double precision, dimension(ixO^S)      :: inv_volume
     double precision :: fLC(ixI^S, nwflux), fRC(ixI^S, nwflux)
     double precision :: dxinv(1:ndim)
     integer :: idim, iw, ix^L, hxO^L
@@ -102,7 +103,7 @@ contains
     double precision, dimension(ixI^S,1:ndir)             :: fE
 
     ! primitive w at cell center
-    double precision, dimension(ixI^S,1:nw) :: wprim
+    double precision, dimension(ixI^S,1:nw) :: wprim, wtmp
     ! left and right constructed status in conservative form
     double precision, dimension(ixI^S,1:nw) :: wLC, wRC
     ! left and right constructed status in primitive form, needed for better performance
@@ -110,14 +111,14 @@ contains
     double precision, dimension(ixI^S, nwflux) :: fLC, fRC
     double precision, dimension(ixI^S)      :: cmaxC
     double precision, dimension(ixI^S)      :: cminC
-    double precision, dimension(ixO^S)      :: inv_volume
+    double precision, dimension(ixO^S)      :: inv_volume, inv_cap0, ken0
     double precision, dimension(1:ndim)     :: dxinv
     double precision, dimension(ixI^S,1:ndir,2) :: vbarC                                                                                      
     double precision, dimension(ixI^S,1:ndir,2) :: vbarLC,vbarRC                                                                              
     double precision, dimension(ixI^S,ndim)   :: cbarmin,cbarmax                                                                              
     integer                                 :: idimE,idimN
     integer, dimension(ixI^S)               :: patchf
-    integer :: idim, iw, ix^L, hxO^L, ixC^L, ixCR^L, kxC^L, kxR^L
+    integer :: idim, iw, ix^L, hxO^L, ixC^L, ixCR^L, kxC^L, kxR^L, idir
 
     associate(wCT=>sCT%w, wnew=>snew%w, wold=>sold%w)
     staggered : associate(wCTs=>sCT%ws, wnews=>snew%ws, wolds=>sold%ws)
@@ -137,6 +138,13 @@ contains
 
     wprim=wCT
     call phys_to_primitive(ixI^L,ixI^L,wprim,x)
+
+    ! TODO: clean this up
+    if (associated(phys_iw_methods(iw_mom(1))%inv_capacity)) then
+      ! Store initial 1/capacity and variables
+      call phys_iw_methods(iw_mom(1))%inv_capacity(ixI^L, ixO^L, wCT, inv_cap0)
+      wtmp = wCT
+    end if
 
     ^D&dxinv(^D)=-qdt/dx^D;
     do idim= idim^LIM
@@ -240,6 +248,23 @@ contains
 
     call addsource2(qdt*dble(idimmax-idimmin+1)/dble(ndim), &
          ixI^L,ixO^L,1,nw,qtC,wCT,qt,wnew,x,.false.)
+
+    !> TODO: clean this up
+    if (associated(phys_iw_methods(iw_mom(1))%inv_capacity)) then
+      call phys_iw_methods(iw_mom(1))%inv_capacity(ixI^L, ixO^L, wnew, inv_volume)
+      ! Store old kinetic energy
+      ken0(ixO^S) = 0.5d0 * sum(wnew(ixO^S, iw_mom(:))**2, dim=ndim+1) / wnew(ixO^S, iw_rho)
+
+      ! Correct the update step as if the momentum variable was capacity * rho * u
+      do idir = 1, ndir
+        iw = iw_mom(idir)
+        wnew(ixO^S,iw) = (wtmp(ixO^S,iw)/inv_cap0 + (wnew(ixO^S,iw) - wtmp(ixO^S,iw))) * inv_volume
+      end do
+
+      ! Correct the internal energy to keep the thermal pressure the same
+      wnew(ixO^S, iw_e) = wnew(ixO^S, iw_e) + &
+           0.5d0 * sum(wnew(ixO^S, iw_mom(:))**2, dim=ndim+1) / wnew(ixO^S, iw_rho) - ken0
+    end if
 
     ! check and optionally correct unphysical values
     call phys_handle_small_values(.false.,wnew,x,ixI^L,ixO^L,'finite_volume')
